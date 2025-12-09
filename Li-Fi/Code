@@ -1,0 +1,238 @@
+/* 
+  Li-Fi Based Under Water Communication.
+
+  Guided by: Mr. K. S. V. Ramanaji, Assistant Professor, NSRIT
+*/
+
+#include <LiquidCrystal.h>
+
+// LCD pins: LiquidCrystal(rs, enable, d4, d5, d6, d7);
+LiquidCrystal lcd(6, 7, 5, 4, 3, 2);
+
+// Pin definitions
+const int motorPin  = 10;    // PWM motor control
+const int eyePin    = 12;    // eye (drowsiness) sensor input
+const int alcPin    = 11;    // alcohol sensor input (digital)
+const int buttonPin = A0;    // helmet / button input (uses internal pullup)
+const int buzzerPin = 13;    // buzzer
+const int trigPin   = 8;     // ultrasonic trigger
+const int echoPin   = 9;     // ultrasonic echo
+
+// Globals / state
+char gchr = '0';            // serial-received speed/zone char ('1','2','3', etc.)
+int eye_flag = 0;
+int motorv = 0;             // motor allowed (1) or not (0)
+long duration_us = 0;
+int distanceCm = 0;
+
+// Buffers (sizes chosen conservatively)
+char alc_string[8];
+char eye_string[8];
+char hel_string[8];
+
+void setup() {
+  // pins
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  pinMode(eyePin, INPUT);
+  pinMode(alcPin, INPUT);
+  pinMode(buttonPin, INPUT_PULLUP);
+  pinMode(motorPin, OUTPUT);
+  pinMode(buzzerPin, OUTPUT);
+
+  // set buzzer to OFF state (HIGH used as OFF in original hardware)
+  digitalWrite(buzzerPin, HIGH);
+
+  Serial.begin(9600);
+
+  lcd.begin(16, 2);
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Smart Driver");
+  lcd.setCursor(0, 1);
+  lcd.print("Assistance System");
+  delay(2000);
+
+  // initial dashboard layout
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("A:");        // Alcohol status at 2
+  lcd.setCursor(6, 0);
+  lcd.print("U:");        // Ultrasonic distance at 8
+  lcd.setCursor(0, 1);
+  lcd.print("S:");        // Seat/helmet at 2,1
+  lcd.setCursor(8, 1);
+  lcd.print("E:");        // Eye status at 10,1
+}
+
+// Simple beep function -- uses active-low buzzer convention similar to original
+void beep() {
+  digitalWrite(buzzerPin, LOW);   // sound ON (based on original)
+  delay(250);                     // short beep for alert
+  digitalWrite(buzzerPin, HIGH);  // sound OFF
+}
+
+// Reads ultrasonic sensor and returns distance in cm
+unsigned int ultra_dist_cm() {
+  // ensure trigger low
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  duration_us = pulseIn(echoPin, HIGH, 30000); // 30ms timeout
+  if (duration_us == 0) return 255; // nothing detected -> returns big distance
+
+  // speed of sound ~ 343 m/s -> 0.0343 cm/us ; original used 0.034 -> keep similar
+  distanceCm = (int)(duration_us * 0.034 / 2.0);
+  return (unsigned int) distanceCm;
+}
+
+// Clears a fixed region on the LCD (useful to avoid leftover characters)
+void lcdClearRegion(int col, int row, int len) {
+  lcd.setCursor(col, row);
+  for (int i = 0; i < len; ++i) lcd.print(' ');
+}
+
+// show distance with fixed width
+void showDistance(int dist) {
+  lcd.setCursor(8, 0);
+  lcdClearRegion(8, 0, 6);              // clear previous distance and unit
+  lcd.setCursor(8, 0);
+  if (dist >= 200) {
+    lcd.print("---"); // out of range
+  } else {
+    lcd.print(dist);
+    lcd.print("cm");
+  }
+}
+
+void loop() {
+  // --- ALCOHOL SENSOR ---
+  if (digitalRead(alcPin) == LOW) { // original treated LOW as ON
+    lcd.setCursor(2, 0);
+    lcd.print("ON ");
+    strncpy(alc_string, "ON", sizeof(alc_string));
+    motorv = 0;
+    analogWrite(motorPin, 0);
+    beep();
+  } else {
+    lcd.setCursor(2, 0);
+    lcd.print("OFF");
+    strncpy(alc_string, "OFF", sizeof(alc_string));
+  }
+
+  // --- ULTRASONIC AVG of 5 readings ---
+  long sumDist = 0;
+  const int samples = 5;
+  for (int i = 0; i < samples; ++i) {
+    sumDist += ultra_dist_cm();
+    delay(10);
+  }
+  int avgDist = (int)(sumDist / samples);
+  showDistance(avgDist);
+  delay(10);
+
+  // --- HELMET / BUTTON (S:) ---
+  if (digitalRead(buttonPin) == LOW) { // pressed -> helmet on
+    lcd.setCursor(2, 1);
+    lcd.print("Wear");
+    strncpy(hel_string, "W", sizeof(hel_string)); // short label
+    // motorv may remain; helmet must be ON to allow motor later
+  } else {
+    lcd.setCursor(2, 1);
+    lcd.print("N.W ");
+    strncpy(hel_string, "NW", sizeof(hel_string));
+    motorv = 0;
+    analogWrite(motorPin, 0);
+    beep();
+  }
+
+  // --- EYE / drowsiness sensor logic ---
+  // When eye sensor reads HIGH -> "Open"
+  if (digitalRead(eyePin) == HIGH) {
+    lcd.setCursor(10, 1);
+    lcd.print("Open ");
+    strncpy(eye_string, "Open", sizeof(eye_string));
+    eye_flag = 0;
+  } else {
+    // eye sensor LOW -> start counting how long it's LOW (drowsiness detection)
+    eye_flag = 0;
+    lcdClearRegion(10, 1, 6);
+    // count with 100ms steps up to a threshold (original used >=35 or >=40)
+    while (digitalRead(eyePin) == LOW && eye_flag < 40) {
+      delay(100);
+      ++eye_flag;
+      // display a two-digit counter in place (like original convertl1)
+      lcd.setCursor(10, 1);
+      if (eye_flag < 10) lcd.print('0'); // leading zero for single digit
+      lcd.print(eye_flag);
+    }
+
+    if (eye_flag >= 35) {
+      // long closed: mark as Close and stop motor
+      lcd.setCursor(10, 1);
+      lcd.print("Close");
+      strncpy(eye_string, "Close", sizeof(eye_string));
+      motorv = 0;
+      analogWrite(motorPin, 0);
+      beep();
+    } else {
+      // blink was short
+      lcd.setCursor(10, 1);
+      lcd.print("Open ");
+      strncpy(eye_string, "Open", sizeof(eye_string));
+    }
+    eye_flag = 0;
+  }
+
+  // --- Determine whether motor can run: conditions from original code
+  // motor allowed if: alc OFF (HIGH), distance > 40, helmet worn (button LOW), eyes open
+  bool alc_ok = (digitalRead(alcPin) == HIGH);
+  bool helmet_worn = (digitalRead(buttonPin) == LOW);
+  bool eyes_open = (digitalRead(eyePin) == HIGH);
+  if (alc_ok && (avgDist > 40) && helmet_worn && eyes_open) {
+    motorv = 1;
+  } else {
+    motorv = 0;
+  }
+
+  // --- Motor control: uses serial char `gchr` to pick zone/speed
+  if (motorv == 1) {
+    if (gchr == '1') {
+      analogWrite(motorPin, 100); // low speed
+      lcd.setCursor(14, 0);
+      lcd.print("Z1");
+    } else if (gchr == '2') {
+      analogWrite(motorPin, 150); // medium speed
+      lcd.setCursor(14, 0);
+      lcd.print("Z2");
+    } else if (gchr == '3') {
+      analogWrite(motorPin, 255); // faster; clamp to 255
+      lcd.setCursor(14, 0);
+      lcd.print("Z3");
+    } else {
+      analogWrite(motorPin, 200); // default
+      lcd.setCursor(14, 0);
+      lcd.print("Z-");
+    }
+  } else {
+    analogWrite(motorPin, 0);
+    lcd.setCursor(14, 0);
+    lcd.print("   "); // clear zone area
+  }
+
+  // small main-loop delay to stabilize update rate
+  delay(200);
+}
+
+// Serial incoming handler: update gchr with last received character
+void serialEvent() {
+  while (Serial.available()) {
+    char inChar = (char)Serial.read();
+    // accept only digits '1','2','3','4', else ignore but store '0'
+    if (inChar >= '0' && inChar <= '9') gchr = inChar;
+    else gchr = inChar; // store whatever came (keeps original behavior)
+  }
+}
