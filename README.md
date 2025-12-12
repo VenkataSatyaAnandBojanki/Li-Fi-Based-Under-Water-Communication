@@ -39,10 +39,16 @@ Underwater wireless communication using radio waves suffers major limitations du
 
 ---
 
-## 🖼️ Block Diagram
-## 📸 Project Hardware
-![Underwater Li-Fi Setup](top_view.jpeg)
 
+## 📸 Project Hardware
+<p align="center">
+  <img src="Project_View/top_view.jpeg" width="400" style="transform: rotate(90deg);">
+</p>
+
+<p align="center">
+  <img src="Project_View/Set_up.jpeg" width="450">
+</p>
+| **SET_UP** |
 
 
 
