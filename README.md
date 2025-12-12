@@ -48,7 +48,7 @@ Underwater wireless communication using radio waves suffers major limitations du
 <p align="center">
   <img src="Project_View/Set_up.jpeg" width="450">
 </p>
-| **SET_UP** |
+
 
 
 
@@ -142,7 +142,10 @@ Assistant Professor, NSRIT
 6. Send data from TX side → observe at RX output.
 
 ---
-
+## Team Size 5
+<p align="center">
+  <img src="Project_View/Team_size.jpeg" width="450">
+</p>
 
 
 
